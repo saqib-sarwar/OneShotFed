@@ -9,6 +9,12 @@ import torch.optim as optim
 import numpy as np
 from nngeometry.metrics import FIM
 from nngeometry.object import PMatKFAC, PMatDiag, PVector
+  
+import os
+import sys
+sys.path.insert(0, '/data/saqib/bayesian_fl/normal_fl/optimizers')
+
+from ivon import IVON
 
 class LocalUpdate(object):
     def __init__(self, args, dataset=None):
@@ -54,3 +60,48 @@ class LocalUpdate(object):
         vec_curr = parameters_to_vector(net.parameters())            
         return vec_curr, net, F_kfac, F_diag
 
+    def compute_hessian(self, net, optimizer):
+        with torch.no_grad():
+            vec = optimizer.state_dict()["param_groups"][0]['hess'].detach().clone()
+            vector_to_parameters(vec, net.parameters())
+            return net.state_dict()
+
+    def train_ivon(self, net, n_c):
+        net.train()
+        optimizer =  IVON(net.parameters(), 
+                               lr=self.args['eta'],
+                               ess=self.args['ess'], 
+                               weight_decay=self.args['weight_decay'], 
+                               hess_init=self.args['hess_init'])
+        step_count = 0
+
+        for epoch in range(self.args['local_epochs']):
+            batch_loss = []
+            for batch_idx, (images, labels) in enumerate(self.ldr_train):
+                images, labels = images.to(self.args['device']), labels.to(self.args['device'])
+                if(self.args['augmentation']==True):
+                    images = self.transform_train(images)
+                optimizer.zero_grad()
+                
+                for _ in range(self.args['mc_train']):
+                    with optimizer.sampled_params(train=True):
+                        log_probs = net(images)
+                        loss = self.loss_func(log_probs, labels)
+                        loss.backward()
+                        batch_loss.append(loss.item())
+                # output = self.model(input)
+                # loss = self.loss_fn(output, target)         
+                # loss.backward()                
+                
+                optimizer.step()
+                
+
+            print ("Epoch No. ", epoch, "Loss " , sum(batch_loss)/len(batch_loss))
+            
+        
+        # crate an  exact copy of the network
+        net_copy = copy.deepcopy(net)
+        vec_curr = parameters_to_vector(net.parameters()) 
+        hess = self.compute_hessian(net_copy, optimizer)
+        return vec_curr, net, hess
+        

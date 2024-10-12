@@ -4,7 +4,6 @@ import torch
 from torch.nn.utils import parameters_to_vector, vector_to_parameters
 
 
-
 from data import get_dataset
 from models import get_model
 from train_model import LocalUpdate
@@ -17,6 +16,12 @@ from algs.pfnm import oneshot_matching, compute_full_cnn
 from algs.regmean import regmean_global_merge
 
 
+def state_dict_to_vector(state_dict):
+    param_list = []
+    for param in state_dict.values():
+        param_list.append(param.view(-1))  # Flatten each tensor
+    return torch.cat(param_list)  # Concatenate all flattened tensors into a single vector
+
 
 def get_fedavg_model(d, n, p, args, net_glob, model_vectors):
     fedavg_model = copy.deepcopy(net_glob)
@@ -26,6 +31,19 @@ def get_fedavg_model(d, n, p, args, net_glob, model_vectors):
     vector_to_parameters(model_avg,fedavg_model.parameters())
     return fedavg_model
 
+def get_oneshot_ivon_model(d, n, p, args, net_glob, model_vectors, dataset_val, hessian_list):
+    fedivon_model = copy.deepcopy(net_glob)
+    global_hessian = torch.zeros(d).to(args['device'])
+    model_avg = torch.zeros(d).to(args['device'])
+    for i in range(n):
+        global_hessian += p[i]*state_dict_to_vector(hessian_list[i])
+    
+    for i in range(n):
+        model_avg += p[i] * torch.dot(model_vectors[i], state_dict_to_vector(hessian_list[i]))
+    
+    model_avg /= global_hessian
+    vector_to_parameters(model_avg, fedivon_model.parameters())
+    return fedivon_model, global_hessian
 
 def get_fisher_merge_model(d, n, p, args, net_glob, model_vectors, F_diag_list):
     
@@ -310,9 +328,11 @@ def get_dense_model(d, n, p, args, net_glob, models, model_vectors, dataset_val,
     return dense_model
 
 
-def get_one_shot_model(alg,d,n,p,args,net_glob, models, model_vectors, F_kfac_list, F_diag_list, dataset_val,dataset_train, dataset_train_global, dataset_test_global, filename, net_cls_counts):
+def get_one_shot_model(alg,d,n,p,args,net_glob, models, model_vectors, F_kfac_list, F_diag_list, hessian_list, dataset_val,dataset_train, dataset_train_global, dataset_test_global, filename, net_cls_counts):
     if(alg=='fedavg'):
         return get_fedavg_model(d, n, p, args, net_glob, model_vectors)
+    elif(alg == 'fedivon'):
+        return get_oneshot_ivon_model(d, n, p, args, net_glob, model_vectors, dataset_val, hessian_list)
     elif(alg == 'fisher_merge'):
         return get_fisher_merge_model(d, n, p, args, net_glob, model_vectors, F_diag_list)
     elif(alg == 'fedfisher_diag'):
