@@ -15,12 +15,7 @@ from train_model import LocalUpdate
 from run_one_shot_algs import get_one_shot_model
 from utils.compute_accuracy import test_img
 
-
-
-
-
 parser = argparse.ArgumentParser()
-
 
 parser.add_argument('--dataset', type=str, required=True)
 parser.add_argument('--model', type=str, required=True)
@@ -47,12 +42,6 @@ num_rounds = args_parser.num_rounds
 print_every_test = 1
 print_every_train = 1
 
-
-
-filename = "one_shot_results_"+str(seed)+"_"+dataset+"_"+model_name+"_"+"_"+str(local_epochs)
-filename_csv = filename + ".csv"
-
-
 if(dataset=='CIFAR100'):
   n_c = 100
 elif (dataset == 'GTSRB'):
@@ -61,10 +50,12 @@ else: n_c = 10
 
 dict_results = {}
 
-
 for alg in algs_to_run:
   print ("Running algorithm", alg)
   print ("Using pre-trained model:", use_pretrained)
+  
+  filename = "one_shot_results_"+str(seed)+"_"+dataset+"_"+model_name+"_"+ alg+"_"+str(local_epochs)
+  filename_csv = filename + ".csv"
 
   np.random.seed(3)
   dataset_train, dataset_train_global, dataset_test_global, net_cls_counts = get_dataset(dataset, num_clients, n_c, alpha, False)
@@ -77,7 +68,7 @@ for alg in algs_to_run:
   args={
   "bs":64,
   "local_epochs":local_epochs,
-  "device":'cuda',
+  "device": torch.device('cuda' if torch.cuda.is_available() else 'cpu'),
   "rounds":num_rounds, 
   "num_clients": num_clients,
   "augmentation": False,
@@ -93,7 +84,7 @@ for alg in algs_to_run:
   torch.manual_seed(seed)
   random.seed(seed)
   torch.backends.cudnn.deterministic = True
-  net_glob_org = get_model(args['model'], n_c, bias = False, use_pretrained = use_pretrained).to(args['device'])
+  net_glob_org = get_model(args['model'], n_c, bias = False, use_pretrained = use_pretrained).to(args['device'])  # n_c is the number of classes
 
 
   n = len(dataset_train)
@@ -122,6 +113,7 @@ for alg in algs_to_run:
         args['eta'] = 0.001     ### Smaller learning rate if using pretrained model
           
     ind = [i for i in range(n)]
+    hessian_list = []
     F_kfac_list = []
     F_diag_list = []
     model_vectors = []
@@ -132,11 +124,11 @@ for alg in algs_to_run:
         print ("Training Local Model ", i)
         net_glob.train()
         local = LocalUpdate(args=args, dataset=dataset_train[i])
-        model_vector, model, F_kfac, F_diag = local.train_and_compute_fisher(copy.deepcopy(net_glob), args['n_c'])
+        model_vector, model, F_kfac, F_diag = local.train_and_compute_fisher(copy.deepcopy(net_glob), i, args['n_c'])
         model_vectors.append(model_vector)
         models.append(model)
         test_acc, test_loss = test_img(model, dataset_test_global,args)
-        print ("Local Model ", i, "Test Acc. ", test_acc, "Test Loss ", test_loss)
+        print ("SGD Local Model ", i, "Test Acc. ", test_acc, "Test Loss ", test_loss)
         local_model_accs.append(test_acc.flatten()[0])
         local_model_loss.append(test_loss)
 
@@ -156,11 +148,11 @@ for alg in algs_to_run:
 
   ### Creating one-shot model depending on the algorithm
   net_glob = get_one_shot_model(alg, d,n,p,args,net_glob, models, model_vectors, \
-  F_kfac_list, F_diag_list, dataset_val, dataset_train, dataset_train_global, \
+  F_kfac_list, F_diag_list, hessian_list, dataset_val, dataset_train, dataset_train_global, \
   dataset_test_global, filename, net_cls_counts)
   
   test_acc, test_loss = test_img(net_glob, dataset_test_global,args)
-  print ("Test Acc. ", test_acc, "Test Loss", test_loss)
+  print (alg + " Test Acc. ", test_acc, "Test Loss", test_loss)
   dict_results[alg + '_test_loss_'+str(seed)+"_"+str(t)] = test_loss
   dict_results[alg + '_test_acc_' +str(seed)+"_"+str(t)] = test_acc
   

@@ -14,6 +14,7 @@ from algs.otfusion import one_shot_otfusion
 from algs.dense import KLDiv,AdvSynthesizer,Ensemble,kd_train,Generator,test
 from algs.pfnm import oneshot_matching, compute_full_cnn
 from algs.regmean import regmean_global_merge
+from algs.ivon_global import one_shot_ivon
 
 
 def state_dict_to_vector(state_dict):
@@ -31,19 +32,42 @@ def get_fedavg_model(d, n, p, args, net_glob, model_vectors):
     vector_to_parameters(model_avg,fedavg_model.parameters())
     return fedavg_model
 
+# def get_oneshot_ivon_model(d, n, p, args, net_glob, model_vectors, hessian_vectors):
+#     fedivon_model = copy.deepcopy(net_glob)
+#     global_hessian = torch.zeros(d).to(args['device'])
+#     model_avg = torch.zeros(d).to(args['device'])
+#     for i in range(n):
+#         global_hessian += p[i]*hessian_vectors[i]
+        
+#     for i in range(n):
+#         model_avg += torch.dot(model_vectors[i],hessian_vectors[i])*p[i]
+    
+#     model_avg /= global_hessian
+#     vector_to_parameters(model_avg, fedivon_model.parameters())
+#     return fedivon_model, model_avg, global_hessian
+
 def get_oneshot_ivon_model(d, n, p, args, net_glob, model_vectors, dataset_val, hessian_list):
+    args_ivon = {}
+    args_ivon['T'] = 2000
+    args_ivon['eta'] = 0.01
+    
+    grad_sum = torch.zeros(d).to(args['device'])
+    hessian_sum = torch.zeros(d).to(args['device'])
+    model_vector_sum = torch.zeros(d).to(args['device'])
+    
+    for i in range(n):
+        grad_ = hessian_list[i]*model_vectors[i]
+        grad_sum += grad_
+        hessian_sum += hessian_list[i]
+        model_vector_sum += p[i]*model_vectors[i]
+        
     fedivon_model = copy.deepcopy(net_glob)
-    global_hessian = torch.zeros(d).to(args['device'])
-    model_avg = torch.zeros(d).to(args['device'])
-    for i in range(n):
-        global_hessian += p[i]*state_dict_to_vector(hessian_list[i])
+    vector_to_parameters(model_vector_sum,fedivon_model.parameters())
+    fedivon_avg = one_shot_ivon(fedivon_model, hessian_sum, grad_sum, p, dataset_val, args_ivon, args)
+    vector_to_parameters(fedivon_avg,fedivon_model.parameters())
     
-    for i in range(n):
-        model_avg += p[i] * torch.dot(model_vectors[i], state_dict_to_vector(hessian_list[i]))
-    
-    model_avg /= global_hessian
-    vector_to_parameters(model_avg, fedivon_model.parameters())
-    return fedivon_model, global_hessian
+    return fedivon_model, hessian_sum
+
 
 def get_fisher_merge_model(d, n, p, args, net_glob, model_vectors, F_diag_list):
     
@@ -328,11 +352,11 @@ def get_dense_model(d, n, p, args, net_glob, models, model_vectors, dataset_val,
     return dense_model
 
 
-def get_one_shot_model(alg,d,n,p,args,net_glob, models, model_vectors, F_kfac_list, F_diag_list, hessian_list, dataset_val,dataset_train, dataset_train_global, dataset_test_global, filename, net_cls_counts):
+def get_one_shot_model(alg,d,n,p,args,net_glob, models, model_vectors, F_kfac_list, F_diag_list, hessian_vectors, dataset_val,dataset_train, dataset_train_global, dataset_test_global, filename, net_cls_counts):
     if(alg=='fedavg'):
         return get_fedavg_model(d, n, p, args, net_glob, model_vectors)
     elif(alg == 'fedivon'):
-        return get_oneshot_ivon_model(d, n, p, args, net_glob, model_vectors, dataset_val, hessian_list)
+        return get_oneshot_ivon_model(d, n, p, args, net_glob, model_vectors, hessian_vectors)
     elif(alg == 'fisher_merge'):
         return get_fisher_merge_model(d, n, p, args, net_glob, model_vectors, F_diag_list)
     elif(alg == 'fedfisher_diag'):
